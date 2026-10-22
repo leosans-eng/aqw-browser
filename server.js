@@ -40,6 +40,7 @@ const MIME = {
   ".map": "application/json",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
 };
 
 function relayBase(req) {
@@ -220,7 +221,11 @@ server.on("upgrade", async (req, socket, head) => {
 server.on("error", (error) => {
   if (error.code === "EADDRINUSE") {
     console.error(`Port ${PORT} is already in use. A game server is probably still running at http://${HOST}:${PORT}`);
-    process.exit(1);
+    // process.exit() while keep-alive sockets close trips a libuv assertion on Windows.
+    process.exitCode = 1;
+    agent.destroy();
+    wss.close();
+    return;
   }
   throw error;
 });

@@ -1,12 +1,39 @@
 const GAME_URL = "https://game.aq.com/game/gamefiles/Loader4.swf?ver=b";
-const STAGE_WIDTH = 960;
-const STAGE_HEIGHT = 550;
+const SETTINGS_KEY = "aqw-settings";
+const RESOLUTIONS = {
+  960: { width: 960, height: 550 },
+  75: { width: 720, height: 412 },
+  50: { width: 480, height: 275 },
+};
+// Ruffle's "webgl" and "canvas" backends lack BitmapData.draw, which AQW needs to build characters.
+const RENDERERS = ["auto", "webgpu", "wgpu-webgl"];
+
+function loadSettings() {
+  let saved = {};
+  try {
+    saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}");
+  } catch {
+    saved = {};
+  }
+  const requested = params.get("resolution") || saved.resolution || "window";
+  const renderer = params.get("renderer") || saved.renderer || "auto";
+  return {
+    hud: params.has("hud") || Boolean(saved.hud),
+    resolution: requested === "window" || RESOLUTIONS[requested] ? requested : "window",
+    renderer: RENDERERS.includes(renderer) ? renderer : "auto",
+  };
+}
+
+function saveSettings(next) {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+}
 
 const params = new URLSearchParams(location.search);
 const config = window.AQW_CONFIG || {};
 const relay = (params.get("relay") || config.relay || location.origin).replace(/\/$/, "");
 const relaySocket = relay.replace(/^http/, "ws");
 const status = document.getElementById("status");
+const settings = loadSettings();
 
 function showError(message) {
   status.innerHTML = "";
@@ -26,9 +53,10 @@ function rewriteRules() {
   ];
 }
 
-function startHud() {
+function installHud() {
   const hud = document.createElement("div");
   hud.id = "hud";
+  hud.hidden = !settings.hud;
   document.body.append(hud);
 
   const sockets = { open: 0, opened: 0, closed: 0, last: "none" };
@@ -36,7 +64,7 @@ function startHud() {
   window.WebSocket = class extends NativeWebSocket {
     constructor(url, protocols) {
       super(url, protocols);
-      const target = new URL(url).searchParams.get("port") || "?";
+      const target = new URL(url, location.href).searchParams.get("port") || "?";
       this.addEventListener("open", () => {
         sockets.open += 1;
         sockets.opened += 1;
@@ -66,19 +94,31 @@ function startHud() {
     }).observe({ type: "longtask", buffered: false });
   }
 
+  const nativeLog = console.log;
+  console.log = (...args) => {
+    const text = args.map(String).join(" ");
+    const match = text.match(/Used renderer: ([\w-]+)/);
+    if (match) window.AQW_RENDERER = match[1];
+    nativeLog(...args);
+  };
+
   const tick = (now) => {
     frames += 1;
     worstFrame = Math.max(worstFrame, now - lastFrame);
     lastFrame = now;
-    if (now - lastReport >= 1000) {
+    if (!hud.hidden && now - lastReport >= 1000) {
       const seconds = (now - lastReport) / 1000;
+      const canvas = document.querySelector("ruffle-player")?.shadowRoot?.querySelector("canvas");
+      const drawn = canvas
+        ? `${Math.round(canvas.width / devicePixelRatio)}×${Math.round(canvas.height / devicePixelRatio)}`
+        : "…";
       const busy = Math.min(100, Math.round((longTaskMs / (seconds * 1000)) * 100));
       hud.textContent = [
         `page fps ${Math.round(frames / seconds)}  worst frame ${Math.round(worstFrame)} ms`,
         `blocked ${busy}%  long tasks ${longTasks}`,
         `world sockets open ${sockets.open}  reconnects ${Math.max(0, sockets.opened - 1)}`,
         `last socket ${sockets.last}`,
-        `renderer ${window.AQW_RENDERER || "?"}  quality ${options.quality}`,
+        `renderer ${window.AQW_RENDERER || "?"}  drawn ${drawn}`,
       ].join("\n");
       frames = 0;
       longTasks = 0;
@@ -89,14 +129,7 @@ function startHud() {
     requestAnimationFrame(tick);
   };
   requestAnimationFrame(tick);
-
-  const nativeLog = console.log;
-  console.log = (...args) => {
-    const text = args.map(String).join(" ");
-    const match = text.match(/Used renderer: ([\w-]+)/);
-    if (match) window.AQW_RENDERER = match[1];
-    nativeLog(...args);
-  };
+  return hud;
 }
 
 const options = {
@@ -108,7 +141,7 @@ const options = {
   allowFullscreen: true,
   letterbox: "fullscreen",
   scale: "showAll",
-  quality: params.get("quality") || "low",
+  quality: "high",
   menu: false,
   base: "https://game.aq.com/game/gamefiles/",
   parameters: { sLang: "", isweb: "true" },
@@ -117,20 +150,75 @@ const options = {
   maxExecutionDuration: 20,
   credentialAllowList: [relay],
 };
-if (params.get("renderer")) options.preferredRenderer = params.get("renderer");
+if (settings.renderer !== "auto") options.preferredRenderer = settings.renderer;
 if (params.get("fps")) options.frameRate = Number(params.get("fps"));
 
 function fitToWindow(game) {
-  const scale = Math.min(window.innerWidth / STAGE_WIDTH, window.innerHeight / STAGE_HEIGHT);
+  const player = game.querySelector("ruffle-player");
+  if (settings.resolution === "window") {
+    game.style.left = "0";
+    game.style.top = "0";
+    game.style.width = "100%";
+    game.style.height = "100%";
+    game.style.transform = "none";
+    if (player) {
+      player.style.width = "100%";
+      player.style.height = "100%";
+    }
+    return;
+  }
+  const { width, height } = RESOLUTIONS[settings.resolution];
+  game.style.left = "50%";
+  game.style.top = "50%";
+  game.style.width = `${width}px`;
+  game.style.height = `${height}px`;
+  if (player) {
+    player.style.width = `${width}px`;
+    player.style.height = `${height}px`;
+  }
+  const scale = Math.min(window.innerWidth / width, window.innerHeight / height);
   game.style.transform = `translate(-50%, -50%) scale(${scale})`;
 }
 
+function setupSettings(hud) {
+  const button = document.getElementById("settings-button");
+  const form = document.getElementById("settings");
+  form.elements.hud.checked = settings.hud;
+  form.elements.resolution.value = settings.resolution;
+  form.elements.renderer.value = settings.renderer;
+  button.addEventListener("click", () => {
+    form.hidden = !form.hidden;
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!form.hidden && !form.contains(event.target) && !button.contains(event.target)) form.hidden = true;
+  }, true);
+  form.elements.renderer.addEventListener("change", () => {
+    settings.renderer = form.elements.renderer.value;
+    saveSettings(settings);
+    const url = new URL(location.href);
+    url.searchParams.delete("renderer");
+    location.assign(url);
+  });
+  form.elements.hud.addEventListener("change", () => {
+    settings.hud = form.elements.hud.checked;
+    hud.hidden = !settings.hud;
+    saveSettings(settings);
+  });
+  form.elements.resolution.addEventListener("change", () => {
+    settings.resolution = form.elements.resolution.value;
+    saveSettings(settings);
+    fitToWindow(document.getElementById("game"));
+  });
+  form.addEventListener("submit", (event) => event.preventDefault());
+}
+
 async function start() {
+  const hud = installHud();
+  setupSettings(hud);
   if (!window.RufflePlayer) {
     showError("Ruffle did not load. Run npm install and start the server again.");
     return;
   }
-  if (params.has("hud")) startHud();
 
   let socketProxy;
   try {
@@ -148,16 +236,16 @@ async function start() {
   }
 
   options.socketProxy = socketProxy;
-  window.RufflePlayer.config = { ...options, polyfills: false };
+  const { stage, ...ruffleOptions } = options;
+  window.RufflePlayer.config = { ...ruffleOptions, polyfills: false };
 
   const game = document.getElementById("game");
-  fitToWindow(game);
-  window.addEventListener("resize", () => fitToWindow(game));
-
   const player = window.RufflePlayer.newest().createPlayer();
   game.appendChild(player);
+  fitToWindow(game);
+  window.addEventListener("resize", () => fitToWindow(game));
   try {
-    await player.load(options);
+    await player.load(ruffleOptions);
     status.remove();
   } catch (error) {
     showError(`The game client did not start. ${error.message || error}`);
