@@ -46,12 +46,25 @@
       color: #ffb4a8;
       line-height: 1.4;
     }
+    #hud {
+      position: fixed;
+      top: 6px;
+      left: 6px;
+      z-index: 3;
+      padding: 6px 9px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.75);
+      font: 12px/1.45 Consolas, monospace;
+      white-space: pre;
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
   <div id="status"><p>Opening AdventureQuest Worlds…</p></div>
   <div id="game"></div>
-  <script src="/vendor/ruffle.js"></script>
-  <script src="/player.js"></script>
+  <script src="config.js"></script>
+  <script src="vendor/ruffle.js"></script>
+  <script src="player.js"></script>
 </body>
 </html>

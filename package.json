@@ -3,10 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node scripts/build.mjs",
+    "relay:deno": "npx -y deno run --allow-net --allow-env relay/main.ts",
+    "check:deno": "npx -y deno check relay/main.ts"
   },
   "dependencies": {
-    "@ruffle-rs/ruffle": "^0.7.1",
+    "@ruffle-rs/ruffle": "0.8.0-nightly.2026.10.22",
     "ws": "^8.18.3"
   }
 }
